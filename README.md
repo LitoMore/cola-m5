@@ -4,6 +4,10 @@ Connect M5Stack devices to [Cola](https://colaos.ai).
 
 <p align="center"><img width="400" src="./assets/m5stack-cardputer.webp" /></p>
 
+> [!NOTE]\
+> This plugin is still in early development and may have limited functionality or stability.
+> All features and configuration options are subject to change.
+
 This repository has two parts:
 
 - `plugin/`: the Cola plugin that runs on the computer with Cola.
