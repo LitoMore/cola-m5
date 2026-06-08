@@ -29,6 +29,7 @@
     "channel": {
       "label": "M5Stack",
       "description": "Use M5Stack devices as a Cola channel.",
+      "iconUrl": "https://cdn.simpleicons.org/m5stack",
       "aliases": [
         "m5",
         "m5stack"
