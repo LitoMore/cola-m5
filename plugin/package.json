@@ -1,0 +1,39 @@
+{
+  "name": "cola-m5-plugin",
+  "version": "0.0.0",
+  "description": "Cola channel plugin for M5Stack devices.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./distribution/index.js"
+  },
+  "types": "./distribution/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@marswave/cola-plugin-sdk": "^0.0.3",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^6.0.3"
+  },
+  "cola": {
+    "plugin": {
+      "id": "m5",
+      "entry": "./distribution/index.js"
+    },
+    "channel": {
+      "label": "M5Stack",
+      "description": "Use M5Stack devices as a Cola channel.",
+      "aliases": [
+        "m5",
+        "m5stack"
+      ],
+      "docs": "../README.md"
+    }
+  }
+}

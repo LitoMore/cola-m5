@@ -1,0 +1,9 @@
+node_modules/
+distribution/
+**/distribution/
+dist/
+.DS_Store
+
+.pio/
+.vscode/
+firmware/**/include/config.h
