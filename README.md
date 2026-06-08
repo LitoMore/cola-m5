@@ -1,6 +1,6 @@
 # cola-m5
 
-Connect M5Stack devices to Cola.
+Connect M5Stack devices to [Cola](https://colaos.ai).
 
 This repository has two parts:
 
