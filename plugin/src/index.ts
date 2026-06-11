@@ -40,6 +40,10 @@ const pluginState: M5PluginState = {
   clients: new Map()
 }
 
+function isEnabled(config: Readonly<Record<string, unknown>>): boolean {
+  return config.enabled !== false
+}
+
 function getPort(config: Readonly<Record<string, unknown>>): number {
   const value = Number(config.port ?? DEFAULT_PORT)
 
@@ -239,6 +243,15 @@ export default defineChannel({
     schema: {
       fields: [
         {
+          key: 'enabled',
+          path: ['enabled'],
+          label: 'Enable plugin',
+          description: 'Start the WebSocket gateway when Cola launches.',
+          type: 'boolean',
+          required: false,
+          defaultValue: true
+        },
+        {
           key: 'port',
           path: ['port'],
           label: 'WebSocket port',
@@ -252,6 +265,11 @@ export default defineChannel({
   },
   gateway: {
     async start(ctx) {
+      if (!isEnabled(ctx.config)) {
+        ctx.logger.info('M5Stack plugin is disabled via settings')
+        return
+      }
+
       const port = getPort(ctx.config)
 
       closeGateway()
@@ -292,7 +310,15 @@ export default defineChannel({
     async stop() {
       closeGateway()
     },
-    getStatus() {
+    getStatus(ctx) {
+      if (!isEnabled(ctx.config)) {
+        return {
+          connected: false,
+          configured: true,
+          message: 'Plugin disabled'
+        }
+      }
+
       return {
         connected: Boolean(pluginState.server),
         configured: true,
