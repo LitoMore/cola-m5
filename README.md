@@ -24,6 +24,7 @@ The protocol is intentionally model-agnostic so more M5Stack devices can be adde
 ## Supported devices
 
 - [M5Stack Cardputer](https://shop.m5stack.com/products/m5stack-cardputer-adv-version-esp32-s3) - keyboard text input with replies on the built-in screen.
+- [M5Stack Xiaozhi Card Kit](https://docs.m5stack.com/en/guide/realtime/xiaozhi/xiaozhi_card_kit) - experimental e-paper target with setup portal and simple shortcut input.
 - [M5Stack StickS3](https://shop.m5stack.com/products/m5sticks3-esp32s3-mini-iot-dev-kit) - setup portal plus two-button shortcut input with replies on the built-in screen.
 
 ## Layout
@@ -37,6 +38,10 @@ cola-m5/
       include/cola_m5/
       src/
     cardputer/
+      platformio.ini
+      src/main.cpp
+      include/config.h
+    xiaozhi-card-kit/
       platformio.ini
       src/main.cpp
       include/config.h
@@ -108,6 +113,31 @@ Open the serial monitor:
 pio device monitor
 ```
 
+## Flash the Xiaozhi Card Kit firmware
+
+This target is experimental. It treats the M5Stack Xiaozhi Card Kit as an ESP32-S3 e-paper device and uses M5Unified board detection with a PaperS3 fallback. It does not assume a Cardputer keyboard.
+
+Edit `firmware/xiaozhi-card-kit/include/config.h`:
+
+```cpp
+#define COLA_HOST "192.168.1.23"
+#define COLA_PORT 8787
+#define DEVICE_ID "m5-xiaozhi-card-01"
+```
+
+Connect the device over USB-C, then upload:
+
+```bash
+cd firmware/xiaozhi-card-kit
+pio run -t upload
+```
+
+Open the serial monitor:
+
+```bash
+pio device monitor
+```
+
 ## Flash the StickS3 firmware
 
 The StickS3 target uses a setup portal because the device does not have a keyboard. You can leave `firmware/stick-s3/include/config.h` with safe defaults, or set `COLA_HOST` as a prefilled default for the setup page:
@@ -142,6 +172,14 @@ After the firmware boots:
 5. Press `Enter` to send it to Cola.
 
 Cola replies are rendered on the Cardputer screen.
+
+## Xiaozhi Card Kit usage
+
+The Xiaozhi Card Kit target uses the same setup portal style as StickS3. On first boot, or when saved setup is missing, connect a phone or computer to the AP shown on the e-paper screen and open `http://192.168.4.1`.
+
+After setup, tap the left half of the screen, or press `A` if available, to cycle the selected shortcut or advance a reply page. Tap the right half of the screen, or press `B` if available, to send the selected shortcut. Hold touch, or press `C` if available, to reopen setup mode.
+
+Double-press the e-paper back key to power off. Press the back key again to wake the device.
 
 ## StickS3 usage
 
