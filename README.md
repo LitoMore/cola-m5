@@ -23,8 +23,8 @@ The protocol is intentionally model-agnostic so more M5Stack devices can be adde
 
 ## Supported devices
 
-- **M5Stack Cardputer** - keyboard text input with replies on the built-in screen.
-- **M5Stack StickS3** - setup portal plus two-button shortcut input with replies on the built-in screen.
+- [**M5Stack Cardputer**](https://shop.m5stack.com/products/m5stack-cardputer-adv-version-esp32-s3) - keyboard text input with replies on the built-in screen.
+- [**M5Stack StickS3**](https://shop.m5stack.com/products/m5sticks3-esp32s3-mini-iot-dev-kit) - setup portal plus two-button shortcut input with replies on the built-in screen.
 
 ## Layout
 
