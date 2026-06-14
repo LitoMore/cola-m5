@@ -1,0 +1,11 @@
+{
+  "name": "cola_m5_common",
+  "version": "0.1.0",
+  "description": "Shared Cola M5 firmware networking and protocol helpers.",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": {
+    "includeDir": "include",
+    "srcDir": "src"
+  }
+}

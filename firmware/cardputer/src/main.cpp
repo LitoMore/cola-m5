@@ -1,25 +1,21 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include <M5Cardputer.h>
-#include <Preferences.h>
-#include <WebSocketsClient.h>
 #include <WiFi.h>
 
+#include "cola_m5/connection_store.h"
+#include "cola_m5/text.h"
+#include "cola_m5/websocket_client.h"
+#include "cola_m5/wifi_connect.h"
 #include "config.h"
 
 namespace {
-WebSocketsClient webSocket;
-Preferences preferences;
+cola_m5::WebSocketClient colaClient;
+cola_m5::ConnectionSettings connectionSettings;
 
 enum class InputMode : uint8_t {
   Chat,
   WiFiSsid,
   WiFiPassword,
-};
-
-struct WiFiCredentials {
-  String ssid;
-  String password;
 };
 
 String inputText;
@@ -33,18 +29,18 @@ InputMode inputMode = InputMode::Chat;
 bool setupInputSubmitted = false;
 bool inputPrefillSelected = false;
 
-constexpr uint8_t protocolVersion = 1;
-constexpr unsigned long reconnectIntervalMs = 5000;
-constexpr unsigned long wifiConnectTimeoutMs = 20000;
 constexpr size_t maxChatInputLength = 240;
 constexpr size_t maxWifiSsidLength = 32;
 constexpr size_t maxWifiPasswordLength = 64;
 constexpr size_t messageCharsPerLine = 18;
 constexpr uint8_t messageLinesPerPage = 2;
 constexpr size_t messageCharsPerPage = messageCharsPerLine * messageLinesPerPage;
-constexpr char wifiPrefsNamespace[] = "cola-m5";
-constexpr char wifiSsidKey[] = "wifiSsid";
-constexpr char wifiPasswordKey[] = "wifiPass";
+
+constexpr cola_m5::DeviceIdentity deviceIdentity = {
+  DEVICE_ID,
+  DEVICE_MODEL,
+  FIRMWARE_VERSION,
+};
 
 constexpr uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
@@ -63,71 +59,6 @@ constexpr uint16_t colorRed = rgb565(255, 91, 106);
 
 uint16_t messageAccent = colorAccent;
 
-String normalizeText(String text, bool preserveLineBreaks = false) {
-  text.replace("\r", preserveLineBreaks ? "\n" : " ");
-  text.replace("\n", preserveLineBreaks ? "\n" : " ");
-
-  while (text.indexOf("  ") >= 0) {
-    text.replace("  ", " ");
-  }
-
-  if (preserveLineBreaks) {
-    while (text.indexOf(" \n") >= 0) {
-      text.replace(" \n", "\n");
-    }
-
-    while (text.indexOf("\n ") >= 0) {
-      text.replace("\n ", "\n");
-    }
-
-    while (text.indexOf("\n\n") >= 0) {
-      text.replace("\n\n", "\n");
-    }
-  }
-
-  text.trim();
-
-  return text;
-}
-
-String compactText(String text, size_t maxChars) {
-  text = normalizeText(text);
-
-  if (text.length() <= maxChars) {
-    return text;
-  }
-
-  if (maxChars <= 3) {
-    return text.substring(0, maxChars);
-  }
-
-  return text.substring(0, maxChars - 3) + "...";
-}
-
-String tailText(const String& text, size_t maxChars) {
-  if (text.length() <= maxChars) {
-    return text;
-  }
-
-  if (maxChars <= 3) {
-    return text.substring(text.length() - maxChars);
-  }
-
-  return "..." + text.substring(text.length() - (maxChars - 3));
-}
-
-size_t pageCountFor(const String& text) {
-  if (text.length() == 0) {
-    return 1;
-  }
-
-  return (text.length() + messageCharsPerPage - 1) / messageCharsPerPage;
-}
-
-size_t messagePageCount() {
-  return pageCountFor(normalizeText(messageBody, true));
-}
-
 void renderApp();
 void handleKeyboard();
 
@@ -143,9 +74,13 @@ size_t currentMaxInputLength() {
   }
 }
 
+size_t messagePageCount() {
+  return cola_m5::pageCountFor(cola_m5::normalizeText(messageBody, true), messageCharsPerPage);
+}
+
 String currentMessagePageText() {
-  String normalized = normalizeText(messageBody, true);
-  size_t pages = pageCountFor(normalized);
+  String normalized = cola_m5::normalizeText(messageBody, true);
+  size_t pages = cola_m5::pageCountFor(normalized, messageCharsPerPage);
 
   if (messagePage >= pages) {
     messagePage = pages - 1;
@@ -179,7 +114,7 @@ void previousMessagePage() {
 }
 
 void drawLargeLines(String text, int x, int y, size_t charsPerLine, uint8_t maxLines) {
-  text = normalizeText(text, true);
+  text = cola_m5::normalizeText(text, true);
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(colorText, colorPanel);
 
@@ -237,7 +172,7 @@ void drawMessageCard() {
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(messageAccent, colorPanel);
   M5Cardputer.Display.setCursor(16, 38);
-  M5Cardputer.Display.print(compactText(messageTitle, pages > 1 ? 18 : 26));
+  M5Cardputer.Display.print(cola_m5::compactText(messageTitle, pages > 1 ? 18 : 26));
 
   if (pages > 1) {
     M5Cardputer.Display.fillRoundRect(196, 36, 31, 13, 4, colorPanel2);
@@ -293,7 +228,7 @@ void drawInputBox() {
   M5Cardputer.Display.setTextColor(colorText, colorPanel2);
   M5Cardputer.Display.setCursor(14, 114);
   M5Cardputer.Display.print("> ");
-  M5Cardputer.Display.print(tailText(visibleInputText(), 16));
+  M5Cardputer.Display.print(cola_m5::tailText(visibleInputText(), 16));
 }
 
 void renderApp() {
@@ -325,32 +260,6 @@ void drawPrompt() {
   renderApp();
 }
 
-void sendJson(JsonDocument& doc) {
-  String payload;
-  serializeJson(doc, payload);
-  webSocket.sendTXT(payload);
-}
-
-void sendHello() {
-  JsonDocument doc;
-  doc["type"] = "hello";
-  doc["protocolVersion"] = protocolVersion;
-  doc["deviceId"] = DEVICE_ID;
-  doc["deviceModel"] = DEVICE_MODEL;
-  doc["firmware"] = FIRMWARE_VERSION;
-  sendJson(doc);
-}
-
-void sendMessage(const String& text) {
-  JsonDocument doc;
-  doc["type"] = "message";
-  doc["protocolVersion"] = protocolVersion;
-  doc["deviceId"] = DEVICE_ID;
-  doc["deviceModel"] = DEVICE_MODEL;
-  doc["text"] = text;
-  sendJson(doc);
-}
-
 void showIncomingText(const char* prefix, const char* text) {
   uint16_t accent = colorBlue;
 
@@ -365,86 +274,26 @@ void showIncomingText(const char* prefix, const char* text) {
   setMessage(prefix, text, accent);
 }
 
-void handlePluginPayload(const char* payload, size_t length) {
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, payload, length);
-
-  if (error) {
-    showIncomingText("Invalid reply", "Could not parse plugin JSON");
-    return;
-  }
-
-  const char* type = doc["type"] | "";
-
-  if (strcmp(type, "reply") == 0 || strcmp(type, "message") == 0) {
-    const char* text = doc["text"] | "";
-    const char* sender = doc["sender"]["name"] | nullptr;
-
-    if (sender == nullptr || sender[0] == '\0') {
-      sender = doc["sender"] | "Cola";
-    }
-
-    showIncomingText(sender, text);
-    return;
-  }
-
-  if (strcmp(type, "status") == 0) {
-    statusText = doc["message"] | "Connected";
-    colaConnected = doc["connected"] | true;
-    drawStatus("cola-m5", statusText.c_str());
-    delay(800);
-    drawPrompt();
-    return;
-  }
-
-  if (strcmp(type, "error") == 0) {
-    const char* message = doc["message"] | "Unknown error";
-    showIncomingText("Plugin error", message);
-    return;
-  }
-}
-
-void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
-  switch (type) {
-    case WStype_CONNECTED:
-      colaConnected = true;
-      drawStatus("Connected to plugin", "Registering device...");
-      sendHello();
+void handlePluginEvent(const cola_m5::PluginEvent& event) {
+  switch (event.type) {
+    case cola_m5::PluginEventType::Reply:
+      showIncomingText(event.title.c_str(), event.text.c_str());
       break;
-    case WStype_DISCONNECTED:
-      colaConnected = false;
-      drawStatus("Cola disconnected", "Reconnecting...");
+    case cola_m5::PluginEventType::Status:
+      statusText = event.text;
+      colaConnected = event.connected;
+      drawStatus("cola-m5", statusText.c_str());
+      delay(800);
+      drawPrompt();
       break;
-    case WStype_TEXT:
-      handlePluginPayload(reinterpret_cast<const char*>(payload), length);
+    case cola_m5::PluginEventType::Error:
+    case cola_m5::PluginEventType::Invalid:
+      showIncomingText(event.title.c_str(), event.text.c_str());
       break;
+    case cola_m5::PluginEventType::Unknown:
     default:
       break;
   }
-}
-
-WiFiCredentials loadWiFiCredentials() {
-  WiFiCredentials credentials;
-
-  if (!preferences.begin(wifiPrefsNamespace, true)) {
-    return credentials;
-  }
-
-  credentials.ssid = preferences.getString(wifiSsidKey, "");
-  credentials.password = preferences.getString(wifiPasswordKey, "");
-  preferences.end();
-
-  return credentials;
-}
-
-void saveWiFiCredentials(const WiFiCredentials& credentials) {
-  if (!preferences.begin(wifiPrefsNamespace, false)) {
-    return;
-  }
-
-  preferences.putString(wifiSsidKey, credentials.ssid);
-  preferences.putString(wifiPasswordKey, credentials.password);
-  preferences.end();
 }
 
 void clearInputForChat() {
@@ -491,8 +340,8 @@ String promptForWiFiField(
   }
 }
 
-WiFiCredentials promptForWiFiCredentials(const WiFiCredentials& saved) {
-  WiFiCredentials credentials;
+cola_m5::WiFiCredentials promptForWiFiCredentials(const cola_m5::WiFiCredentials& saved) {
+  cola_m5::WiFiCredentials credentials;
   credentials.ssid = promptForWiFiField(
     InputMode::WiFiSsid,
     "Wi-Fi ID",
@@ -513,24 +362,19 @@ WiFiCredentials promptForWiFiCredentials(const WiFiCredentials& saved) {
   return credentials;
 }
 
-bool connectWiFi(const WiFiCredentials& credentials) {
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
-  WiFi.begin(credentials.ssid.c_str(), credentials.password.c_str());
-
-  drawStatus("Connecting Wi-Fi", credentials.ssid.c_str());
-
-  unsigned long startedAt = millis();
-
-  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < wifiConnectTimeoutMs) {
+bool connectConfiguredWiFi(const cola_m5::WiFiCredentials& credentials) {
+  cola_m5::WiFiConnectCallbacks callbacks;
+  callbacks.onStatus = [](const char* title, const String& body) {
+    drawStatus(title, body.c_str());
+  };
+  callbacks.onUpdate = []() {
     M5Cardputer.update();
-    delay(300);
+  };
+  callbacks.onProgress = []() {
     M5Cardputer.Display.print(".");
-  }
+  };
 
-  if (WiFi.status() != WL_CONNECTED) {
-    WiFi.disconnect();
+  if (!cola_m5::connectWiFi(credentials, callbacks)) {
     colaConnected = false;
     setMessage("Wi-Fi failed", "Check ID/password", colorRed);
     delay(1300);
@@ -543,13 +387,13 @@ bool connectWiFi(const WiFiCredentials& credentials) {
 }
 
 void setupWiFi() {
-  WiFiCredentials saved = loadWiFiCredentials();
+  cola_m5::WiFiCredentials saved = cola_m5::loadWiFiCredentials();
 
   while (true) {
-    WiFiCredentials credentials = promptForWiFiCredentials(saved);
-    saveWiFiCredentials(credentials);
+    cola_m5::WiFiCredentials credentials = promptForWiFiCredentials(saved);
+    cola_m5::saveWiFiCredentials(credentials);
 
-    if (connectWiFi(credentials)) {
+    if (connectConfiguredWiFi(credentials)) {
       return;
     }
 
@@ -558,16 +402,26 @@ void setupWiFi() {
 }
 
 void connectCola() {
-  if (strlen(COLA_HOST) == 0) {
+  connectionSettings = cola_m5::loadConnectionSettings(COLA_HOST, COLA_PORT);
+
+  if (!cola_m5::hasColaEndpoint(connectionSettings)) {
     colaConnected = false;
     setMessage("Cola host empty", "Set COLA_HOST", colorRed);
     return;
   }
 
-  webSocket.begin(COLA_HOST, COLA_PORT, "/");
-  webSocket.onEvent(onWebSocketEvent);
-  webSocket.setReconnectInterval(reconnectIntervalMs);
-  webSocket.enableHeartbeat(15000, 3000, 2);
+  cola_m5::WebSocketClientCallbacks callbacks;
+  callbacks.onConnected = []() {
+    colaConnected = true;
+    drawStatus("Connected to plugin", "Registering device...");
+  };
+  callbacks.onDisconnected = []() {
+    colaConnected = false;
+    drawStatus("Cola disconnected", "Reconnecting...");
+  };
+  callbacks.onEvent = handlePluginEvent;
+
+  colaClient.begin(connectionSettings, deviceIdentity, callbacks);
 }
 
 void submitInput() {
@@ -585,7 +439,7 @@ void submitInput() {
     return;
   }
 
-  sendMessage(inputText);
+  colaClient.sendMessage(inputText);
   showIncomingText("Sent", inputText.c_str());
   inputText = "";
 }
@@ -686,16 +540,11 @@ void setup() {
 
 void loop() {
   M5Cardputer.update();
-  webSocket.loop();
+  colaClient.loop();
 
   if (WiFi.status() != WL_CONNECTED) {
     colaConnected = false;
-    unsigned long now = millis();
-
-    if (now - lastReconnectAttempt > reconnectIntervalMs) {
-      lastReconnectAttempt = now;
-      WiFi.reconnect();
-    }
+    cola_m5::reconnectWiFiIfNeeded(lastReconnectAttempt);
   }
 
   handleKeyboard();
