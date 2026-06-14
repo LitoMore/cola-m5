@@ -6,4 +6,3 @@ dist/
 
 .pio/
 .vscode/
-firmware/**/include/config.h

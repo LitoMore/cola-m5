@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <M5Cardputer.h>
+#include <Preferences.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
 
@@ -8,6 +9,18 @@
 
 namespace {
 WebSocketsClient webSocket;
+Preferences preferences;
+
+enum class InputMode : uint8_t {
+  Chat,
+  WiFiSsid,
+  WiFiPassword,
+};
+
+struct WiFiCredentials {
+  String ssid;
+  String password;
+};
 
 String inputText;
 String statusText = "Booting";
@@ -16,13 +29,22 @@ String messageBody = "Type and press Enter";
 size_t messagePage = 0;
 bool colaConnected = false;
 unsigned long lastReconnectAttempt = 0;
+InputMode inputMode = InputMode::Chat;
+bool setupInputSubmitted = false;
+bool inputPrefillSelected = false;
 
 constexpr uint8_t protocolVersion = 1;
 constexpr unsigned long reconnectIntervalMs = 5000;
-constexpr size_t maxInputLength = 240;
+constexpr unsigned long wifiConnectTimeoutMs = 20000;
+constexpr size_t maxChatInputLength = 240;
+constexpr size_t maxWifiSsidLength = 32;
+constexpr size_t maxWifiPasswordLength = 64;
 constexpr size_t messageCharsPerLine = 18;
 constexpr uint8_t messageLinesPerPage = 2;
 constexpr size_t messageCharsPerPage = messageCharsPerLine * messageLinesPerPage;
+constexpr char wifiPrefsNamespace[] = "cola-m5";
+constexpr char wifiSsidKey[] = "wifiSsid";
+constexpr char wifiPasswordKey[] = "wifiPass";
 
 constexpr uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
@@ -41,12 +63,26 @@ constexpr uint16_t colorRed = rgb565(255, 91, 106);
 
 uint16_t messageAccent = colorAccent;
 
-String normalizeText(String text) {
-  text.replace("\r", " ");
-  text.replace("\n", " ");
+String normalizeText(String text, bool preserveLineBreaks = false) {
+  text.replace("\r", preserveLineBreaks ? "\n" : " ");
+  text.replace("\n", preserveLineBreaks ? "\n" : " ");
 
   while (text.indexOf("  ") >= 0) {
     text.replace("  ", " ");
+  }
+
+  if (preserveLineBreaks) {
+    while (text.indexOf(" \n") >= 0) {
+      text.replace(" \n", "\n");
+    }
+
+    while (text.indexOf("\n ") >= 0) {
+      text.replace("\n ", "\n");
+    }
+
+    while (text.indexOf("\n\n") >= 0) {
+      text.replace("\n\n", "\n");
+    }
   }
 
   text.trim();
@@ -89,13 +125,26 @@ size_t pageCountFor(const String& text) {
 }
 
 size_t messagePageCount() {
-  return pageCountFor(normalizeText(messageBody));
+  return pageCountFor(normalizeText(messageBody, true));
 }
 
 void renderApp();
+void handleKeyboard();
+
+size_t currentMaxInputLength() {
+  switch (inputMode) {
+    case InputMode::WiFiSsid:
+      return maxWifiSsidLength;
+    case InputMode::WiFiPassword:
+      return maxWifiPasswordLength;
+    case InputMode::Chat:
+    default:
+      return maxChatInputLength;
+  }
+}
 
 String currentMessagePageText() {
-  String normalized = normalizeText(messageBody);
+  String normalized = normalizeText(messageBody, true);
   size_t pages = pageCountFor(normalized);
 
   if (messagePage >= pages) {
@@ -130,7 +179,7 @@ void previousMessagePage() {
 }
 
 void drawLargeLines(String text, int x, int y, size_t charsPerLine, uint8_t maxLines) {
-  text = normalizeText(text);
+  text = normalizeText(text, true);
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(colorText, colorPanel);
 
@@ -140,8 +189,20 @@ void drawLargeLines(String text, int x, int y, size_t charsPerLine, uint8_t maxL
     }
 
     size_t take = min(charsPerLine, static_cast<size_t>(text.length()));
-    String current = text.substring(0, take);
-    text = text.substring(take);
+    int newlineIndex = text.indexOf('\n');
+    String current;
+
+    if (newlineIndex >= 0 && static_cast<size_t>(newlineIndex) < take) {
+      current = text.substring(0, newlineIndex);
+      text = text.substring(newlineIndex + 1);
+    } else {
+      current = text.substring(0, take);
+      text = text.substring(take);
+
+      if (text.length() > 0 && text.charAt(0) == '\n') {
+        text.remove(0, 1);
+      }
+    }
 
     M5Cardputer.Display.setCursor(x, y + line * 19);
     M5Cardputer.Display.print(current);
@@ -190,18 +251,49 @@ void drawMessageCard() {
   drawLargeLines(body, 16, 53, messageCharsPerLine, messageLinesPerPage);
 }
 
+const char* inputLabel() {
+  switch (inputMode) {
+    case InputMode::WiFiSsid:
+      return "WIFI ID";
+    case InputMode::WiFiPassword:
+      return "WIFI PASS";
+    case InputMode::Chat:
+    default:
+      return "INPUT";
+  }
+}
+
+String maskedText(const String& text) {
+  String masked;
+  masked.reserve(text.length());
+
+  for (size_t i = 0; i < text.length(); ++i) {
+    masked += '*';
+  }
+
+  return masked;
+}
+
+String visibleInputText() {
+  if (inputMode == InputMode::WiFiPassword) {
+    return maskedText(inputText);
+  }
+
+  return inputText;
+}
+
 void drawInputBox() {
   M5Cardputer.Display.fillRoundRect(5, 99, 230, 31, 7, colorPanel2);
   M5Cardputer.Display.drawRoundRect(5, 99, 230, 31, 7, colorAccent);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(colorMuted, colorPanel2);
   M5Cardputer.Display.setCursor(14, 104);
-  M5Cardputer.Display.print("INPUT");
+  M5Cardputer.Display.print(inputLabel());
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(colorText, colorPanel2);
   M5Cardputer.Display.setCursor(14, 114);
   M5Cardputer.Display.print("> ");
-  M5Cardputer.Display.print(tailText(inputText, 16));
+  M5Cardputer.Display.print(tailText(visibleInputText(), 16));
 }
 
 void renderApp() {
@@ -331,22 +423,147 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
-void connectWiFi() {
+WiFiCredentials loadWiFiCredentials() {
+  WiFiCredentials credentials;
+
+  if (!preferences.begin(wifiPrefsNamespace, true)) {
+    return credentials;
+  }
+
+  credentials.ssid = preferences.getString(wifiSsidKey, "");
+  credentials.password = preferences.getString(wifiPasswordKey, "");
+  preferences.end();
+
+  return credentials;
+}
+
+void saveWiFiCredentials(const WiFiCredentials& credentials) {
+  if (!preferences.begin(wifiPrefsNamespace, false)) {
+    return;
+  }
+
+  preferences.putString(wifiSsidKey, credentials.ssid);
+  preferences.putString(wifiPasswordKey, credentials.password);
+  preferences.end();
+}
+
+void clearInputForChat() {
+  inputMode = InputMode::Chat;
+  inputText = "";
+  setupInputSubmitted = false;
+  inputPrefillSelected = false;
+}
+
+String promptForWiFiField(
+  InputMode mode,
+  const char* title,
+  const String& emptyPrompt,
+  const String& prefill,
+  bool required,
+  bool trimValue
+) {
+  while (true) {
+    inputMode = mode;
+    inputText = prefill;
+    setupInputSubmitted = false;
+    inputPrefillSelected = prefill.length() > 0;
+
+    setMessage(title, prefill.length() > 0 ? "Enter to OK\nDel to clear" : emptyPrompt, colorAmber);
+
+    while (!setupInputSubmitted) {
+      M5Cardputer.update();
+      handleKeyboard();
+      delay(10);
+    }
+
+    String value = inputText;
+
+    if (trimValue) {
+      value.trim();
+    }
+
+    if (!required || value.length() > 0) {
+      return value;
+    }
+
+    setMessage("Wi-Fi ID empty", "Type ID then Enter", colorRed);
+    delay(900);
+  }
+}
+
+WiFiCredentials promptForWiFiCredentials(const WiFiCredentials& saved) {
+  WiFiCredentials credentials;
+  credentials.ssid = promptForWiFiField(
+    InputMode::WiFiSsid,
+    "Wi-Fi ID",
+    "Type Wi-Fi ID",
+    saved.ssid,
+    true,
+    true
+  );
+  credentials.password = promptForWiFiField(
+    InputMode::WiFiPassword,
+    "Wi-Fi password",
+    "Type password",
+    saved.password,
+    false,
+    false
+  );
+  clearInputForChat();
+  return credentials;
+}
+
+bool connectWiFi(const WiFiCredentials& credentials) {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.disconnect();
+  delay(100);
+  WiFi.begin(credentials.ssid.c_str(), credentials.password.c_str());
 
-  drawStatus("Connecting Wi-Fi", WIFI_SSID);
+  drawStatus("Connecting Wi-Fi", credentials.ssid.c_str());
 
-  while (WiFi.status() != WL_CONNECTED) {
+  unsigned long startedAt = millis();
+
+  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < wifiConnectTimeoutMs) {
+    M5Cardputer.update();
     delay(300);
     M5Cardputer.Display.print(".");
   }
 
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect();
+    colaConnected = false;
+    setMessage("Wi-Fi failed", "Check ID/password", colorRed);
+    delay(1300);
+    return false;
+  }
+
   drawStatus("Wi-Fi connected", WiFi.localIP().toString().c_str());
   delay(700);
+  return true;
+}
+
+void setupWiFi() {
+  WiFiCredentials saved = loadWiFiCredentials();
+
+  while (true) {
+    WiFiCredentials credentials = promptForWiFiCredentials(saved);
+    saveWiFiCredentials(credentials);
+
+    if (connectWiFi(credentials)) {
+      return;
+    }
+
+    saved = credentials;
+  }
 }
 
 void connectCola() {
+  if (strlen(COLA_HOST) == 0) {
+    colaConnected = false;
+    setMessage("Cola host empty", "Set COLA_HOST", colorRed);
+    return;
+  }
+
   webSocket.begin(COLA_HOST, COLA_PORT, "/");
   webSocket.onEvent(onWebSocketEvent);
   webSocket.setReconnectInterval(reconnectIntervalMs);
@@ -373,14 +590,33 @@ void submitInput() {
   inputText = "";
 }
 
+void submitSetupInput() {
+  setupInputSubmitted = true;
+}
+
+void prepareInputForTyping() {
+  if (inputMode == InputMode::Chat || !inputPrefillSelected) {
+    return;
+  }
+
+  inputText = "";
+  inputPrefillSelected = false;
+}
+
 void handleKeyboard() {
   if (!M5Cardputer.Keyboard.isChange() || !M5Cardputer.Keyboard.isPressed()) {
     return;
   }
 
   Keyboard_Class::KeysState status = M5Cardputer.Keyboard.keysState();
+  size_t maxInputLength = currentMaxInputLength();
 
   if (status.enter) {
+    if (inputMode != InputMode::Chat) {
+      submitSetupInput();
+      return;
+    }
+
     if (inputText.length() == 0 && messagePageCount() > 1) {
       nextMessagePage();
       return;
@@ -391,13 +627,21 @@ void handleKeyboard() {
   }
 
   if (status.del) {
-    if (inputText.length() > 0) {
-      inputText.remove(inputText.length() - 1);
+    if (inputMode != InputMode::Chat && inputPrefillSelected) {
+      inputText = "";
+      inputPrefillSelected = false;
       drawPrompt();
       return;
     }
 
-    if (messagePageCount() > 1) {
+    if (inputText.length() > 0) {
+      inputText.remove(inputText.length() - 1);
+      inputPrefillSelected = false;
+      drawPrompt();
+      return;
+    }
+
+    if (inputMode == InputMode::Chat && messagePageCount() > 1) {
       previousMessagePage();
     }
 
@@ -405,11 +649,17 @@ void handleKeyboard() {
   }
 
   for (char key : status.word) {
+    prepareInputForTyping();
+
     if (inputText.length() >= maxInputLength) {
       break;
     }
 
     inputText += key;
+  }
+
+  if (status.space) {
+    prepareInputForTyping();
   }
 
   if (status.space && inputText.length() < maxInputLength) {
@@ -429,7 +679,7 @@ void setup() {
   Serial.begin(115200);
 
   renderApp();
-  connectWiFi();
+  setupWiFi();
   connectCola();
   drawPrompt();
 }
