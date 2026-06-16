@@ -15,8 +15,28 @@ This repository has two parts:
 
 The current transport is local Wi-Fi with WebSocket:
 
-```text
-M5Stack device <-> cola-m5 plugin <-> Cola
+```mermaid
+flowchart LR
+	subgraph Edge[Edge Device]
+		direction TB
+		Device([M5Stack device])
+	end
+
+	subgraph Host[Computer]
+		direction TB
+		Plugin[cola-m5 plugin]
+		Cola([Cola])
+	end
+
+	Device <-->|WebSocket over local Wi-Fi| Plugin
+	Plugin <-->|JSON protocol| Cola
+
+	classDef device fill:#dff7e2,stroke:#2b8a3e,stroke-width:2px,color:#0f5132;
+	classDef bridge fill:#fff4d6,stroke:#f08c00,stroke-width:2px,color:#7a4e00;
+	classDef service fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#1e3a8a;
+	class Device device;
+	class Plugin bridge;
+	class Cola service;
 ```
 
 The protocol is intentionally model-agnostic so more M5Stack devices can be added later.
