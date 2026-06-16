@@ -110,6 +110,26 @@ int lineHeightFor(int textSize) {
   return (textSize * 8) + max(4, textSize * 3);
 }
 
+int textPixelWidth(const String& text, int textSize) {
+  return static_cast<int>(text.length()) * 6 * textSize;
+}
+
+int headerHeight() {
+  return 58 + ((smallTextSize() - 1) * 18);
+}
+
+int footerTop() {
+  return displayHeight() - 42;
+}
+
+int messagePanelTop() {
+  return headerHeight() + 8;
+}
+
+int messageBodyTop() {
+  return messagePanelTop() + 34;
+}
+
 size_t charsPerLineFor(int maxWidth, int textSize) {
   int charWidth = max(6, textSize * 6);
   int chars = maxWidth / charWidth;
@@ -117,9 +137,8 @@ size_t charsPerLineFor(int maxWidth, int textSize) {
 }
 
 uint8_t bodyLineCount() {
-  int height = displayHeight();
-  int top = 76;
-  int bottom = height - 54;
+  int top = messageBodyTop();
+  int bottom = footerTop() - 12;
   int usable = max(24, bottom - top);
   int lines = usable / lineHeightFor(bodyTextSize());
   return lines > 1 ? static_cast<uint8_t>(lines) : 1;
@@ -284,42 +303,56 @@ void drawWrappedText(
 
 void drawHeader() {
   int width = displayWidth();
-  int textSize = smallTextSize();
+  int smallSize = smallTextSize();
+  int titleSize = smallSize + 1;
+  int margin = 10;
+  int lineY = headerHeight() - 1;
+  String status = statusLabel();
   String board = boardName();
+  String dimensions = String(displayWidth()) + "x" + String(displayHeight());
+  int statusPaddingX = 8 * smallSize;
+  int statusTextWidth = textPixelWidth(status, smallSize);
+  int pillWidth = max(44 * smallSize, statusTextWidth + statusPaddingX * 2);
+  int pillHeight = max(18, (8 * smallSize) + 10);
+  int pillX = max(margin, width - pillWidth - margin);
+  int titleMaxWidth = max(0, pillX - (margin * 2));
+  int resolvedTitleSize = titleSize;
 
-  epaper.drawFastHLine(0, 48, width, colorLine);
-  epaper.setTextSize(textSize + 1);
+  if (textPixelWidth("Cola M5", resolvedTitleSize) > titleMaxWidth && resolvedTitleSize > 1) {
+    resolvedTitleSize = 1;
+  }
+
+  epaper.drawFastHLine(0, lineY, width, colorLine);
+  epaper.setTextSize(resolvedTitleSize);
   epaper.setTextColor(colorInk, colorBg);
-  epaper.setCursor(12, 10);
+  epaper.setCursor(margin, 8);
   epaper.print("Cola M5");
 
-  epaper.setTextSize(textSize);
+  epaper.setTextSize(smallSize);
   epaper.setTextColor(colorInk, colorBg);
-  epaper.setCursor(12, 31);
-  epaper.print(board);
-  epaper.print(" ");
-  epaper.print(displayWidth());
-  epaper.print("x");
-  epaper.print(displayHeight());
+  int dimensionsWidth = textPixelWidth(dimensions, smallSize);
+  int dimensionsX = max(margin, width - dimensionsWidth - margin);
+  int boardMaxWidth = max(8, dimensionsX - (margin * 2));
+  epaper.setCursor(margin, 36 + ((smallSize - 1) * 12));
+  epaper.print(cola_m5::compactText(board, charsPerLineFor(boardMaxWidth, smallSize)));
+  epaper.setCursor(dimensionsX, 36 + ((smallSize - 1) * 12));
+  epaper.print(dimensions);
 
-  int pillWidth = 72 * textSize;
-  int pillX = max(12, width - pillWidth - 12);
-  epaper.drawRoundRect(pillX, 13, pillWidth, 24, 4, colorInk);
-  epaper.setCursor(pillX + 10, 20);
-  epaper.print(statusLabel());
+  epaper.drawRoundRect(pillX, 8, pillWidth, pillHeight, 4, colorInk);
+  epaper.setCursor(pillX + statusPaddingX, 8 + ((pillHeight - (8 * smallSize)) / 2));
+  epaper.print(status);
 }
 
 void drawMessagePanel() {
   int width = displayWidth();
-  int height = displayHeight();
   int textSize = bodyTextSize();
   int smallSize = smallTextSize();
-  int top = 58;
-  int footerTop = height - 42;
+  int top = messagePanelTop();
+  int bottom = footerTop();
   String body = currentMessagePageText();
   size_t pages = messagePageCount();
 
-  epaper.drawRoundRect(8, top, width - 16, max(34, footerTop - top - 8), 4, colorInk);
+  epaper.drawRoundRect(8, top, width - 16, max(34, bottom - top - 8), 4, colorInk);
   epaper.setTextSize(smallSize);
   epaper.setTextColor(colorInk, colorBg);
   epaper.setCursor(18, top + 10);
@@ -332,7 +365,7 @@ void drawMessagePanel() {
     epaper.print(pages);
   }
 
-  drawWrappedText(body, 18, top + 34, width - 36, textSize, bodyLineCount());
+  drawWrappedText(body, 18, messageBodyTop(), width - 36, textSize, bodyLineCount());
 }
 
 void drawFooter() {

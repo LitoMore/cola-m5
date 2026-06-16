@@ -85,14 +85,16 @@ void XiaozhiEpaper::display() {
   sendCommand(0x24);
   sendData(buffer_, sizeof(buffer_));
 
-  uint8_t refreshMode = firstRefresh_ ? kFullRefresh : kPartialRefresh;
+  // The Xiaozhi Card Kit panel ghosts heavily with partial refresh when the
+  // full UI changes, so keep redraws full-refresh until partial regions exist.
+  uint8_t refreshMode = kFullRefresh;
   if (triggerRefresh(refreshMode)) {
     firstRefresh_ = false;
   }
 }
 
 void XiaozhiEpaper::fillScreen(uint16_t color) {
-  memset(buffer_, isInkColor(color) ? 0xFF : 0x00, sizeof(buffer_));
+  memset(buffer_, isInkColor(color) ? 0x00 : 0xFF, sizeof(buffer_));
 }
 
 void XiaozhiEpaper::drawFastHLine(int32_t x, int32_t y, int32_t w, uint16_t color) {
@@ -243,9 +245,9 @@ void XiaozhiEpaper::drawPixel(int32_t x, int32_t y, bool ink) {
   size_t byteIndex = y * kBytesPerRow + (x / 8);
   uint8_t bit = 7 - (x % 8);
   if (ink) {
-    buffer_[byteIndex] |= (1U << bit);
-  } else {
     buffer_[byteIndex] &= ~(1U << bit);
+  } else {
+    buffer_[byteIndex] |= (1U << bit);
   }
 }
 
