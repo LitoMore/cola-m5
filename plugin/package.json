@@ -34,7 +34,7 @@
         "m5",
         "m5stack"
       ],
-      "docs": "../README.md"
+      "docs": "./README.md"
     }
   }
 }
